@@ -60,11 +60,11 @@ async def web_step(data: dict):
         "done": obs.done
     }
 
-from fastapi.responses import HTMLResponse, RedirectResponse  # type: ignore # noqa: E402
+from fastapi.responses import HTMLResponse  # type: ignore # noqa: E402
 
-@app.get("/")
-def root_redirect():
-    return RedirectResponse(url="/web")
+@app.get("/", response_class=HTMLResponse)
+def root():
+    return web_ui()
 
 @app.get("/web", response_class=HTMLResponse)
 def web_ui():
