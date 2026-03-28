@@ -137,7 +137,12 @@ openai >= 1.0.0
 # BrowserGym is required for the submission script (install locally for testing)
 # browsergym-env >= 0.1.0   (optional – only needed for inference.py)
 ```
-All other runtime dependencies are listed in `requirements.txt`.
+All other runtime dependencies for the **server** (Hugging Face Space) are listed in `requirements.txt`.
+
+For the **agent** (to run `inference.py` locally), install dependencies via:
+```bash
+uv pip install -r requirements-agent.txt
+```
 
 ---
 

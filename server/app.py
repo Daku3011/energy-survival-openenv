@@ -64,6 +64,17 @@ async def web_step(data: dict):
         "done": obs.done
     }
 
+@app.get("/web/state")
+async def web_state():
+    # Use the helper to get current observation instead of calling property as method
+    is_done = web_env.current_index >= len(web_env.queue)
+    obs = web_env._get_observation(reward=0.0, done=is_done)
+    return {
+        "observation": obs.model_dump(),
+        "reward": 0.0,
+        "done": is_done
+    }
+
 from fastapi.responses import HTMLResponse  # type: ignore # noqa: E402
 
 @app.get("/", response_class=HTMLResponse)
