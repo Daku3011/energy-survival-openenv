@@ -1,14 +1,3 @@
----
-title: Professional Content Moderation and Policy Enforcement
-emoji: 🛡️
-colorFrom: blue
-colorTo: gray
-sdk: docker
-app_port: 7860
-pinned: false
-license: apache-2.0
----
-
 # Professional Content Moderation & Policy Enforcement (PCMPE)
 
 A high‑fidelity **OpenEnv** reinforcement‑learning environment that simulates a real‑world content moderation pipeline.  Judges can evaluate an AI agent’s ability to:
