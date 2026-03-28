@@ -2,126 +2,239 @@
 # All rights reserved.
 
 """
-Professional Content Moderation - Baseline Inference Script.
-Compliant with OpenEnv Pre-Submission Checklist.
+Inference Script - Professional Content Moderation
+===================================
+MANDATORY
+- Before submitting, ensure the following variables are defined in your environment configuration:
+    API_BASE_URL   The API endpoint for the LLM.
+    MODEL_NAME     The model identifier to use for inference.
+    HF_TOKEN       Your Hugging Face / API key.
+    
+- The inference script must be named `inference.py` and placed in the root directory of the project
+- Participants must use OpenAI Client for all LLM calls using above variables
 """
 
 import os
-import json
+import re
+import base64
+import textwrap
 import logging
-from typing import Dict, Any, List
-import time
-from openai import OpenAI # type: ignore
+from io import BytesIO
+from typing import List, Optional, Dict
 
+from openai import OpenAI
+import numpy as np
+from PIL import Image
+
+# Import BrowserGym (Assuming it's available in the evaluation environment)
 try:
-    from server.moderation_env import ContentModerationEnv
-    from models import ModerationAction, ModerationObservation, ModerationDecision
-except (ImportError, ValueError):
-    from server.moderation_env import ContentModerationEnv # type: ignore
-    from models import ModerationAction, ModerationObservation, ModerationDecision # type: ignore
+    from browsergym_env import BrowserGymAction, BrowserGymEnv
+except ImportError:
+    # Fallback for local development if browsergym is not installed
+    class BrowserGymAction:
+        def __init__(self, action_str): self.action_str = action_str
+    class BrowserGymEnv:
+        @staticmethod
+        def from_docker_image(**kwargs): return None
 
-# Configure Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Configuration
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o")
+MAX_STEPS = 15
+MAX_DOM_CHARS = 3500
+TEMPERATURE = 0.2
+MAX_TOKENS = 300
+FALLBACK_ACTION = "noop()"
 
-# Environment Configuration
-API_BASE_URL = os.getenv("API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
-# Default to gemini-1.5-flash which is widely available and fast
-MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash")
-HF_TOKEN = os.getenv("HF_TOKEN", os.getenv("OPENAI_API_KEY", "mock-token"))
-
-# Initialize OpenAI Client (using HF_TOKEN as api_key)
-client = OpenAI(
-    api_key=HF_TOKEN,
-    base_url=API_BASE_URL
+DEBUG = True
+ACTION_PREFIX_RE = re.compile(
+    r"^(action|next action)\s*[:\-]\s*",
+    re.IGNORECASE,
 )
+ACTION_PATTERN = re.compile(r"[A-Za-z_]+\s*\(.*\)", re.DOTALL)
 
-def get_llm_decision(obs: ModerationObservation) -> ModerationAction:
-    """Queries the LLM to make a moderation decision."""
+SYSTEM_PROMPT = textwrap.dedent(
+    """
+    You control a web browser through BrowserGym to perform Professional Content Moderation.
+    The goal is to review the content against the provided policy and take one of three actions:
+    1. ALLOW: Click the 'btn-allow' button.
+    2. DELETE: Click the 'btn-delete' button.
+    3. ESCALATE: Click the 'btn-escalate' button.
     
-    prompt = f"""
-You are a Professional Content Moderator. Review the following content based on the provided policy.
+    Before clicking a button, you MUST type a rationale into the textarea with ID 'rationale-input'.
+    
+    Reply with exactly one action string.
+    The action must be a valid BrowserGym command such as:
+    - noop()
+    - click('element_id')
+    - fill('selector', 'text to enter')
+    - type('selector', 'text to enter')
+    
+    Example sequence:
+    1. fill('rationale-input', 'This content violates the policy because...')
+    2. click('btn-delete')
+    
+    Use single quotes around string arguments.
+    Do not include explanations or additional text.
+    """
+).strip()
 
-POLICY:
-{obs.policy_guidelines}
+def build_history_lines(history: List[str]) -> str:
+    if not history:
+        return "None"
+    return "\n".join(history[-4:])
 
-CONTENT TO REVIEW (ID: {obs.content_id}):
-"{obs.content_text}"
+def extract_screenshot_uri(observation) -> Optional[str]:
+    if not hasattr(observation, 'screenshot') or observation.screenshot is None:
+        return None
+    screen_array = np.array(observation.screenshot, dtype=np.uint8)
+    image = Image.fromarray(screen_array)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    data_uri = base64.b64encode(buffer.read()).decode("utf-8")
+    return f"data:image/png;base64,{data_uri}"
 
-METADATA:
-{json.dumps(obs.metadata, indent=2)}
+def extract_clickable_elements(observation) -> List[Dict[str, str]]:
+    """Collect BrowserGym element IDs that can be clicked."""
+    metadata = getattr(observation, "metadata", {}) or {}
+    obs_dict = metadata.get("browsergym_obs", {}) or {}
+    extra_props = obs_dict.get("extra_element_properties", {}) or {}
 
-DIRECTIONS:
-1. Choose one decision: ALLOW, DELETE, or ESCALATE.
-2. Provide a brief rationale based on the policy.
-3. Respond ONLY in valid JSON format:
-{{
-  "decision": "ALLOW" | "DELETE" | "ESCALATE",
-  "rationale": "your explanation here"
-}}
-"""
+    clickables: List[Dict[str, str]] = []
+    for bid, props in extra_props.items():
+        if not props.get("clickable"):
+            continue
+        bbox = props.get("bbox") or []
+        bbox_str = ", ".join(map(str, bbox)) if bbox else "?"
+        clickables.append({"bid": str(bid), "bbox": bbox_str})
+    
+    clickables.sort(key=lambda item: item["bid"])
+    return clickables
 
-    # If mock token is used and we are in a testing environment without actual API access,
-    # we provide a deterministic heuristic to ensure the script "completes without error".
-    if HF_TOKEN == "mock-token" and "openai.com" in API_BASE_URL:
-        logger.warning("Using mock heuristic (No valid API credentials).")
-        text = obs.content_text.lower()
-        if any(w in text for w in ["scam", "cheap", "idiot", "inferior", "bleach", "deepfake"]):
-            return ModerationAction(decision=ModerationDecision.DELETE, rationale="Filtered by baseline heuristic (Mock mode).")
-        if "giving up" in text:
-            return ModerationAction(decision=ModerationDecision.ESCALATE, rationale="Escalated by baseline heuristic (Mock mode).")
-        return ModerationAction(decision=ModerationDecision.ALLOW, rationale="Allowed by baseline heuristic (Mock mode).")
+def build_user_prompt(step: int, observation, history: List[str]) -> str:
+    goal = getattr(observation, 'goal', "Moderate the pending content queue.")
+    url = getattr(observation, 'url', "http://localhost:7860/web")
+    error_note = "Yes" if getattr(observation, 'last_action_error', None) else "No"
+
+    clickables = extract_clickable_elements(observation)
+    if clickables:
+        actions_hint = "\n".join(f"    - {item['bid']} (bbox: {item['bbox']})" for item in clickables)
+    else:
+        actions_hint = "    (none detected - use IDs: rationale-input, btn-allow, btn-delete, btn-escalate)"
+
+    prompt = textwrap.dedent(
+        f"""
+        Step: {step}
+        Goal: {goal}
+        Current URL: {url}
+        Previous steps:
+        {build_history_lines(history)}
+        Last action error: {error_note}
+        Available clickable element IDs: {actions_hint}
+        
+        Task Reference:
+        - Textarea: rationale-input
+        - Buttons: btn-allow, btn-delete, btn-escalate
+        
+        Reply with exactly one BrowserGym action string.
+        """
+    ).strip()
+    return prompt
+
+def parse_model_action(response_text: str) -> str:
+    if not response_text:
+        return FALLBACK_ACTION
+    lines = response_text.splitlines()
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line: continue
+        line = ACTION_PREFIX_RE.sub("", line)
+        match = ACTION_PATTERN.search(line)
+        if match:
+            action = match.group(0).strip()
+            return re.sub(r"\s+", " ", action)
+    match = ACTION_PATTERN.search(response_text)
+    if match:
+        action = match.group(0).strip()
+        return re.sub(r"\s+", " ", action)
+    return FALLBACK_ACTION
+
+def main() -> None:
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+
+    # Use the browsergym environment configured for this task
+    # For submisson, organizers will provide the correctly configured image
+    env = BrowserGymEnv.from_docker_image(
+        image="browsergym-env:latest",
+        env_vars={
+            "BROWSERGYM_BENCHMARK": "custom",
+            "BROWSERGYM_TASK_NAME": "professional-moderation",
+            "TASK_URL": "http://localhost:7860/web"
+        },
+    )
+
+    if env is None:
+        print("Error: BrowserGymEnv not initialized. Ensure browsergym is installed.")
+        return
+
+    history: List[str] = []
 
     try:
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": "You are a professional content moderator. Respond with JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            response_format={"type": "json_object"}
-        )
-        res_data = json.loads(response.choices[0].message.content)
-        return ModerationAction(
-            decision=ModerationDecision(res_data["decision"]),
-            rationale=res_data.get("rationale", "No rationale provided.")
-        )
-    except Exception as e:
-        logger.error(f"Error calling LLM: {e}")
-        return ModerationAction(decision=ModerationDecision.ALLOW, rationale="Error fallback.")
+        result = env.reset()
+        observation = result.observation
+        print(f"Episode goal: {getattr(observation, 'goal', 'Moderate Content')}")
 
-def run_inference_on_level(level: int):
-    """Runs the inference loop for a specific level."""
-    env = ContentModerationEnv()
-    obs = env.reset(level=level)
-    
-    logger.info(f"=== Starting Level {level} ===")
-    
-    while not obs.done:
-        logger.info(f"Reviewing Content ID: {obs.content_id}")
-        action = get_llm_decision(obs)
-        logger.info(f"Action: {action.decision} | Rationale: {action.rationale[:50]}...")
-        
-        obs = env.step(action)
-        logger.info(f"Step Reward: {obs.reward} | Current Score: {obs.current_score}")
-        
-        # Respect Rate Limits for free tier (e.g. 5-15 RPM)
-        if not obs.done:
-            logger.info("Respecting API Rate Limit (12s delay)...")
-            time.sleep(12)
+        for step in range(1, MAX_STEPS + 1):
+            if result.done:
+                print("Environment signalled done. Stopping early.")
+                break
 
-    logger.info(f"Level {level} Complete. Final Score: {obs.current_score}")
-    return obs.current_score
+            user_prompt = build_user_prompt(step, observation, history)
+            user_content = [{"type": "text", "text": user_prompt}]
+            screenshot_uri = extract_screenshot_uri(observation)
+            if screenshot_uri:
+                user_content.append({"type": "image_url", "image_url": {"url": screenshot_uri}})
+
+            messages = [
+                {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
+                {"role": "user", "content": user_content},
+            ]
+
+            try:
+                completion = client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=messages,
+                    temperature=TEMPERATURE,
+                    max_tokens=MAX_TOKENS,
+                    stream=False,
+                )
+                response_text = completion.choices[0].message.content or ""
+            except Exception as exc:
+                print(f"Model request failed ({exc}). Using fallback action.")
+                response_text = FALLBACK_ACTION
+
+            action_str = parse_model_action(response_text)
+            print(f"Step {step}: model suggested -> {action_str}")
+
+            result = env.step(BrowserGymAction(action_str=action_str))
+            observation = result.observation
+
+            reward = getattr(result, 'reward', 0.0) or 0.0
+            error_flag = " ERROR" if getattr(observation, 'last_action_error', None) else ""
+            history_line = f"Step {step}: {action_str} -> reward {reward:+.2f}{error_flag}"
+            history.append(history_line)
+            print(f"  Reward: {reward:+.2f} | Done: {result.done}")
+
+            if result.done:
+                print("Episode complete.")
+                break
+        else:
+            print(f"Reached max steps ({MAX_STEPS}).")
+
+    finally:
+        env.close()
 
 if __name__ == "__main__":
-    logger.info("Starting Baseline Inference Process")
-    
-    scores = {}
-    for level in [1, 2, 3]:
-        score = run_inference_on_level(level)
-        scores[f"Level_{level}"] = score
-    
-    logger.info("Inference Batch Complete")
-    print("\nRESULTS SUMMARY:")
-    print(json.dumps(scores, indent=4))
-    print("====================================")
+    main()

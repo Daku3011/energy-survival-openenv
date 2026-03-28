@@ -14,7 +14,7 @@ except ImportError:
     pass
 
 try:
-    from ..models import ModerationAction, ModerationObservation
+    from models import ModerationAction, ModerationObservation
     from .moderation_env import ContentModerationEnv
 except (ImportError, ValueError):
     from models import ModerationAction, ModerationObservation # type: ignore
@@ -168,15 +168,15 @@ def web_ui():
                     <textarea id="rationale-input" class="w-full bg-black/40 border border-white/10 rounded-xl p-4 text-sm focus:border-[#00f1fe] focus:ring-0 transition-all h-24" placeholder="Explain your decision based on the protocol guidelines..."></textarea>
                     
                     <div class="grid grid-cols-3 gap-4">
-                        <button onclick="takeStep('ALLOW')" class="group flex flex-col items-center gap-2 p-4 bg-[#005b31]/20 border border-[#005b31]/40 rounded-xl hover:bg-[#005b31]/40 transition-all">
+                        <button id="btn-allow" data-bid="btn-allow" onclick="takeStep('ALLOW')" class="group flex flex-col items-center gap-2 p-4 bg-[#005b31]/20 border border-[#005b31]/40 rounded-xl hover:bg-[#005b31]/40 transition-all">
                             <span class="material-symbols-outlined text-[#00fd93] group-hover:scale-110 transition-transform">check_circle</span>
                             <span class="text-xs font-bold uppercase tracking-wider text-[#00fd93]">Allow</span>
                         </button>
-                        <button onclick="takeStep('DELETE')" class="group flex flex-col items-center gap-2 p-4 bg-[#9f0519]/20 border border-[#9f0519]/40 rounded-xl hover:bg-[#9f0519]/40 transition-all">
+                        <button id="btn-delete" data-bid="btn-delete" onclick="takeStep('DELETE')" class="group flex flex-col items-center gap-2 p-4 bg-[#9f0519]/20 border border-[#9f0519]/40 rounded-xl hover:bg-[#9f0519]/40 transition-all">
                             <span class="material-symbols-outlined text-[#ff716c] group-hover:scale-110 transition-transform">delete_forever</span>
                             <span class="text-xs font-bold uppercase tracking-wider text-[#ff716c]">Delete</span>
                         </button>
-                        <button onclick="takeStep('ESCALATE')" class="group flex flex-col items-center gap-2 p-4 bg-[#390050]/20 border border-[#390050]/40 rounded-xl hover:bg-[#390050]/40 transition-all">
+                        <button id="btn-escalate" data-bid="btn-escalate" onclick="takeStep('ESCALATE')" class="group flex flex-col items-center gap-2 p-4 bg-[#390050]/20 border border-[#390050]/40 rounded-xl hover:bg-[#390050]/40 transition-all">
                             <span class="material-symbols-outlined text-[#d674ff] group-hover:scale-110 transition-transform">priority_high</span>
                             <span class="text-xs font-bold uppercase tracking-wider text-[#d674ff]">Escalate</span>
                         </button>

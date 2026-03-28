@@ -78,9 +78,17 @@ export HF_TOKEN="your-api-key"                         # Your API Key (used as H
 
 #### Execute Inference:
 ```bash
+# This environment uses BrowserGym for high-fidelity evaluation.
+# Ensure the server is running (uv run server) before executing inference.
+# You will also need the 'browsergym' and 'playwright' packages.
+
+export API_BASE_URL="https://router.huggingface.co/v1" 
+export MODEL_NAME="gpt-4o"
+export HF_TOKEN="your-huggingface-token"
+
 python3 inference.py
 ```
-*Note: If credentials are not provided, the script will fall back to a deterministic heuristic for local validation.*
+*Note: The script is designed to interact directly with the Web UI at `/web` to simulate human moderation workflow.*
 
 ---
 
