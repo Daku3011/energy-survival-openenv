@@ -5,4 +5,13 @@ runtime: fastapi
 app: server.app:app
 port: 7860
 
-
+tasks:
+  - id: easy
+    name: Level 1 - Standard Content
+    description: Moderate straightforward commercial spam and community posts.
+  - id: medium
+    name: Level 2 - Policy Nuance
+    description: Handle multi-faceted policy violations like harassment and insults.
+  - id: hard
+    name: Level 3 - High Stakes
+    description: Manage critical safety escalations and complex policy edge cases.

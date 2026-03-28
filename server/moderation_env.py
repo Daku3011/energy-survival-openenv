@@ -1,93 +1,138 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+
 """
-Professional Content Moderation & Policy Enforcement (PCMPE) Environment.
+Professional Content Moderation & Policy Enforcement Environment.
 """
 
 import random
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
-from typing import Tuple, List, Set, Optional, Dict, Any
-from openenv.core.env_server.interfaces import Environment  # type: ignore
-from openenv.core.env_server.types import State  # type: ignore
+
+from openenv.core.env_server.interfaces import Environment
+from openenv.core.env_server.types import State
 
 try:
-    from ..models import ModerationAction, ModerationObservation, ModerationDecision
+    from ..models import ModerationAction, ModerationDecision, ModerationObservation
 except (ImportError, ValueError):
-    from models import ModerationAction, ModerationObservation, ModerationDecision # type: ignore
+    from models import ModerationAction, ModerationDecision, ModerationObservation # type: ignore
 
 class ContentModerationEnv(Environment):
     """
-    Environment where an agent moderates user-generated content based on platform policies.
+    An environment for training and evaluating content moderation agents.
+    Agents must review content items and decide whether to ALLOW, DELETE, or ESCALATE.
     """
 
-    SUPPORTS_CONCURRENT_SESSIONS: bool = True
-
     def __init__(self):
-        self._state = State(episode_id=str(uuid4()), step_count=0)
-        self.queue: List[Dict[str, Any]] = []
-        self.current_index = 0
-        self.cumulative_reward = 0.0
-        self.policy = ""
+        super().__init__()
         self.level = 1
-
-    def reset(self, level: int = 1) -> ModerationObservation:
-        self.level = level
-        self._state = State(episode_id=str(uuid4()), step_count=0)
+        self.queue: List[Dict[str, Any]] = []
+        self.policy = ""
         self.current_index = 0
-        self.cumulative_reward = 0.0
+        self.total_reward = 0.0
+        self._state = State(episode_id=str(uuid4()), step_count=0)
+        self.reset(level=1)
+
+    def reset(self, level: Optional[int] = None, task_id: Optional[str] = None, seed: Optional[int] = None, **kwargs) -> ModerationObservation:
+        """
+        Resets the environment. Supports both 'level' (numeric) and 'task_id' (string).
+        """
+        if seed is not None:
+            random.seed(seed)
+            
+        # Prioritize task_id from ResetRequest if provided
+        if task_id:
+            task_map = {
+                "easy": 1, "level_1": 1, "level1": 1,
+                "medium": 2, "level_2": 2, "level2": 2,
+                "hard": 3, "level_3": 3, "level3": 3
+            }
+            self.level = task_map.get(task_id.lower(), 1)
+        elif level is not None:
+            self.level = level
+        else:
+            self.level = 1
+
+        self.queue, self.policy = self._load_data(self.level)
+        self.current_index = 0
+        self.total_reward = 0.0
+        self._state = State(episode_id=str(uuid4()), step_count=0)
         
-        self.queue, self.policy = self._load_data(level)
         return self._get_observation(reward=0.0, done=False)
 
     def step(self, action: ModerationAction) -> ModerationObservation:
         if self.current_index >= len(self.queue):
             return self._get_observation(reward=0.0, done=True)
 
-        self._state.step_count += 1
         current_item = self.queue[self.current_index]
-        correct_decision = current_item["ground_truth"]
+        reward = self._calculate_reward(action, current_item)
         
-        # Calculate Reward
-        step_reward = 0.0
-        if action.decision == correct_decision:
-            step_reward += 10.0
-            # Small bonus for rationale length (rudimentary quality proxy)
-            if len(action.rationale.split()) > 5:
-                step_reward += 2.0
-            
-            # Keyword matching for higher quality rationale
-            matches = [w for w in current_item.get("keywords", []) if w.lower() in action.rationale.lower()]
-            step_reward += len(matches) * 1.5
-        else:
-            step_reward -= 15.0  # Penalty for incorrect moderation is high
-            
-        self.cumulative_reward += step_reward
+        self.total_reward += reward
         self.current_index += 1
+        self._state.step_count = self.current_index
         
         done = self.current_index >= len(self.queue)
-        return self._get_observation(reward=step_reward, done=done)
+        return self._get_observation(reward=reward, done=done)
 
-    def _get_observation(self, reward: float = 0.0, done: bool = False) -> ModerationObservation:
+    @property
+    def state(self) -> State:
+        """Returns the current internal state of the environment."""
+        is_done = self.current_index >= len(self.queue)
+        # Update custom data for the state object
+        self._state.is_done = is_done
+        self._state.custom_data = {
+            "level": self.level,
+            "score": self.total_reward,
+            "queue_remaining": len(self.queue) - self.current_index,
+            "current_index": self.current_index
+        }
+        return self._state
+
+    def _calculate_reward(self, action: ModerationAction, item: Dict[str, Any]) -> float:
+        """Calculates reward based on alignment with ground truth and rationale quality."""
+        # 1. Decision Match (Base Reward: 10)
+        if action.decision == item["ground_truth"]:
+            reward = 10.0
+        else:
+            # Major penalty for wrong decision
+            reward = -10.0
+            
+        # 2. Rationale Quality (Bonus: up to 5)
+        # Check for presence of key technical terms (simulating high-quality reasoning)
+        rationale_lower = action.rationale.lower()
+        keyword_hits = sum(1 for kw in item.get("keywords", []) if kw.lower() in rationale_lower)
+        reward += min(keyword_hits, 5.0)
+        
+        return reward
+
+    def _get_observation(self, reward: float, done: bool) -> ModerationObservation:
+        """Constructs the observation object for the current state."""
         if self.current_index < len(self.queue):
             item = self.queue[self.current_index]
             obs = ModerationObservation(
                 content_id=item["id"],
                 content_text=item["text"],
-                metadata=item["metadata"],
                 policy_guidelines=self.policy,
                 queue_remaining=len(self.queue) - self.current_index,
-                current_score=self.cumulative_reward,
+                current_score=self.total_reward,
                 reward=reward,
-                done=done
+                done=done,
+                metadata={
+                    "author": item.get("metadata", {}).get("author", "Unknown"),
+                    "steps": self.current_index
+                }
             )
         else:
+            # Tail observation when queue is empty
             obs = ModerationObservation(
-                content_id="END",
-                content_text="Moderation queue completed.",
-                metadata={},
+                content_id="EOF",
+                content_text="No more content in queue.",
                 policy_guidelines=self.policy,
                 queue_remaining=0,
-                current_score=self.cumulative_reward,
+                current_score=self.total_reward,
                 reward=reward,
-                done=done
+                done=done,
+                metadata={"steps": self.current_index}
             )
         return obs
 
@@ -123,7 +168,3 @@ class ContentModerationEnv(Environment):
         # Add some variation by shuffling
         random.shuffle(data)
         return data, policy
-
-    @property
-    def state(self) -> State:
-        return self._state
