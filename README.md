@@ -1,3 +1,14 @@
+---
+title: Professional Content Moderation and Policy Enforcement
+emoji: 🛡️
+colorFrom: blue
+colorTo: gray
+sdk: docker
+app_port: 7860
+pinned: false
+license: apache-2.0
+---
+
 # Professional Content Moderation & Policy Enforcement (PCMPE)
 
 A high‑fidelity **OpenEnv** reinforcement‑learning environment that simulates a real‑world content moderation pipeline.  Judges can evaluate an AI agent’s ability to:
@@ -12,12 +23,12 @@ A high‑fidelity **OpenEnv** reinforcement‑learning environment that simulate
 ```mermaid
 flowchart TD
     subgraph Server[FastAPI Server]
-        A[moderation_env.py] --> B[app.py (Web UI)]
-        B --> C[Endpoints: /web/reset, /web/step]
+        A[moderation_env.py] --> B["app.py (Web UI)"]
+        B --> C["Endpoints: /web/reset, /web/step"]
     end
     subgraph Agent[BrowserGym Agent]
-        D[inference.py] --> E[BrowserGymEnv (Docker image)]
-        E --> F[Web UI Interaction]
+        D[inference.py] --> E["BrowserGymEnv (Docker image)"]
+        E --> F["Web UI Interaction"]
     end
     subgraph Grader[Programmatic Grader]
         G[grader.py] --> A
