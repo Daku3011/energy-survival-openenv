@@ -43,9 +43,6 @@ except (ImportError, ValueError):
             from treasure_env.models import ModerationAction, ModerationObservation
             from treasure_env.server.moderation_env import ContentModerationEnv
 
-# Ensure Web Interface is enabled for Gradio if create_app uses it
-os.environ["ENABLE_WEB_INTERFACE"] = "true"
-
 app = create_app(
     ContentModerationEnv,
     ModerationAction,

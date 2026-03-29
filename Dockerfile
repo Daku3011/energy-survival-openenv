@@ -6,7 +6,7 @@ RUN useradd -m -u 1000 user
 USER user
 ENV PATH="/home/user/.local/bin:$PATH"
 ENV PYTHONPATH="/app:/app/server"
-ENV ENABLE_WEB_INTERFACE="true"
+ENV ENABLE_WEB_INTERFACE="false"
 
 WORKDIR /app
 
